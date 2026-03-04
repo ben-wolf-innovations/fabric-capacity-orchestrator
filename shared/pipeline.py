@@ -61,10 +61,18 @@ def wait_for_pipeline_success(job_id: str, timeout_seconds: int = 7200, poll_int
         if resp.status_code != 200:
             raise Exception(f"Failed to get job status: {resp.status_code} {resp.text}")
         
-        status = resp.json().get("status")
+        data = resp.json()
+        status = data.get("status")
+        logging.info(f"Pipeline job {job_id} response: {data}")
         logging.info(f"Pipeline job {job_id} status: {status}")
         
-        if status in ("Completed", "Failed", "Cancelled"):
+        # Check for completion indicators
+        if status == "Completed" or data.get("endTimeUtc"):
+            logging.info(f"Pipeline job completed with status: {status}")
+            return status or "Completed"
+        
+        if status in ("Failed", "Cancelled"):
+            logging.error(f"Pipeline job {job_id} failed or was cancelled with status: {status}")
             return status
         
         time.sleep(poll_interval)
