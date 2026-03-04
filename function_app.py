@@ -1,5 +1,6 @@
 import datetime
 import logging
+import time
 import azure.functions as func
 
 from shared.watermark import get_watermark_utc
@@ -28,12 +29,17 @@ def capacity_scheduler(mytimer: func.TimerRequest) -> None:
     try:
         logging.info("Resuming capacity")
         resume_capacity()
-        # If you implement wait_for_capacity_active(), call it here
+        
+        logging.info("Waiting for capacity to fully spin up...")
+        time.sleep(30)
 
         logging.info("Running pipeline")
         run_id = run_pipeline()
         status = wait_for_pipeline_success(run_id)
         logging.info(f"Pipeline run completed with status: {status}")
+        
+        logging.info("Waiting before pausing capacity...")
+        time.sleep(30)
 
     except Exception as ex:
         logging.error(f"Error during orchestration: {ex}")

@@ -10,36 +10,63 @@ FABRIC_SCOPE = os.environ.get(
 )
 
 WORKSPACE_ID = os.environ["WORKSPACE_ID"]
-PIPELINE_ID = os.environ["PIPELINE_ID"]
+PIPELINE_ITEM_ID = os.environ["PIPELINE_ID"]  # This is the item ID in Fabric
 
 def run_pipeline() -> str:
+    """Run a pipeline and return the job instance ID."""
     token = get_access_token(FABRIC_SCOPE)
-    url = f"https://api.fabric.microsoft.com/v1/workspaces/{WORKSPACE_ID}/pipelines/{PIPELINE_ID}/run"
+    url = f"https://api.fabric.microsoft.com/v1/workspaces/{WORKSPACE_ID}/items/{PIPELINE_ITEM_ID}/jobs/instances?jobType=Pipeline"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    resp = requests.post(url, headers=headers, json={})
-    resp.raise_for_status()
-    data = resp.json()
-    run_id = data.get("id") or data.get("runId")
-    if not run_id:
-        raise Exception(f"Could not find run id in response: {data}")
-    return run_id
+    payload = {
+        "executionData": {
+            "pipelineName": PIPELINE_ITEM_ID
+        }
+    }
+    resp = requests.post(url, headers=headers, json=payload)
+    if resp.status_code != 202:
+        raise Exception(f"Failed to run pipeline: {resp.status_code} {resp.text}")
+    
+    # The job instance ID is in the Location header or response
+    # Try the response first, then fall back to parsing Location header
+    data = resp.json() if resp.text else {}
+    job_id = data.get("id")
+    
+    if not job_id:
+        # Extract from Location header if available
+        location = resp.headers.get("Location", "")
+        if location:
+            # Location header format: /v1/workspaces/xxx/items/xxx/jobs/instances/{jobInstanceId}
+            parts = location.split("/")
+            if parts:
+                job_id = parts[-1]
+    
+    if not job_id:
+        raise Exception(f"Could not find job instance ID in response: {data}, headers: {resp.headers}")
+    
+    logging.info(f"Pipeline run started with job instance ID: {job_id}")
+    return job_id
 
-def wait_for_pipeline_success(run_id: str, timeout_seconds: int = 7200, poll_interval: int = 30):
+def wait_for_pipeline_success(job_id: str, timeout_seconds: int = 7200, poll_interval: int = 30):
+    """Poll pipeline job status until completion."""
     token = get_access_token(FABRIC_SCOPE)
-    url = f"https://api.fabric.microsoft.com/v1/workspaces/{WORKSPACE_ID}/pipelines/{PIPELINE_ID}/runs/{run_id}"
+    url = f"https://api.fabric.microsoft.com/v1/workspaces/{WORKSPACE_ID}/items/{PIPELINE_ITEM_ID}/jobs/instances/{job_id}"
     headers = {"Authorization": f"Bearer {token}"}
 
     start = time.time()
     while time.time() - start < timeout_seconds:
         resp = requests.get(url, headers=headers)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            raise Exception(f"Failed to get job status: {resp.status_code} {resp.text}")
+        
         status = resp.json().get("status")
-        logging.info(f"Pipeline run {run_id} status: {status}")
-        if status in ("Succeeded", "Failed", "Cancelled"):
+        logging.info(f"Pipeline job {job_id} status: {status}")
+        
+        if status in ("Completed", "Failed", "Cancelled"):
             return status
+        
         time.sleep(poll_interval)
 
-    raise TimeoutError(f"Pipeline run {run_id} did not complete in time")
+    raise TimeoutError(f"Pipeline job {job_id} did not complete in {timeout_seconds} seconds")
